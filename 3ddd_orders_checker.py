@@ -45,7 +45,7 @@ async def check_site(bot, name, url, session):
         soup = BeautifulSoup(text, "html.parser")
         item = soup.select_one(".work-list-item")
         if not item:
-            return
+            return None, None  # Возвращаем None, если нет данных
 
         title = item.select_one("h3").get_text(strip=True)
         link = "https://3ddd.ru" + item.select_one("a")["href"]
@@ -57,8 +57,11 @@ async def check_site(bot, name, url, session):
                 msg = f"🆕 <b>Новое в разделе {name}:</b>\n{title}\n{link}"
                 await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode=constants.ParseMode.HTML)
                 print("Отправлено сообщение:", msg)
+            return title, link
+        return None, None  # Если ссылка не изменилась, возвращаем None
     except Exception as e:
         print(f"Ошибка при проверке {name}: {e}")
+        return None, None
 
 # --- ФОНОВАЯ ЗАДАЧА ---
 async def main_loop(bot):
@@ -84,8 +87,16 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def latest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_lines = []
-    for name, link in last_seen.items():
-        msg_lines.append(f"<b>{name}:</b> {link if link else 'нет данных'}")
+    
+    # Получаем первую вакансию и заказ
+    async with aiohttp.ClientSession() as session:
+        vacancy_title, vacancy_link = await check_site(update.bot, "Вакансии", URLS["Вакансии"], session)
+        task_title, task_link = await check_site(update.bot, "Заказы", URLS["Заказы"], session)
+
+    # Показываем данные, если они есть
+    msg_lines.append(f"<b>Вакансия:</b> {vacancy_title if vacancy_title else 'Нет данных'}")
+    msg_lines.append(f"<b>Заказ:</b> {task_title if task_title else 'Нет данных'}")
+    
     await update.message.reply_text("\n".join(msg_lines), parse_mode=constants.ParseMode.HTML)
 
 async def commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -102,9 +113,17 @@ async def on_startup(bot):
     global started
     if not started:
         try:
+            # Выполняем сразу первую проверку для получения первых вакансий и заказов
+            async with aiohttp.ClientSession() as session:
+                vacancy_title, _ = await check_site(bot, "Вакансии", URLS["Вакансии"], session)
+                task_title, _ = await check_site(bot, "Заказы", URLS["Заказы"], session)
+
             await bot.send_message(
                 chat_id=CHAT_ID,
-                text="✅ Бот запущен и работает!\nНапиши /commands, чтобы увидеть список доступных команд"
+                text=f"✅ Бот запущен и работает!\n\n"
+                     f"Первая вакансия: {vacancy_title if vacancy_title else 'Нет данных'}\n"
+                     f"Первый заказ: {task_title if task_title else 'Нет данных'}\n"
+                     "Напиши /commands, чтобы увидеть список доступных команд"
             )
             print("Стартовое сообщение отправлено ✅")
             started = True  # Устанавливаем флаг, чтобы избежать повторного запуска
