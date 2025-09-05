@@ -24,7 +24,7 @@ last_checked = {name: None for name in URLS}
 
 first_run = True  # флаг для предотвращения рассылки при старте
 
-# --- FLASK ДЛЯ RENDER (не стартуем сразу, запустим в main) ---
+# --- FLASK ДЛЯ RENDER ---
 app = Flask(__name__)
 
 @app.route("/")
@@ -32,9 +32,9 @@ def index():
     return "Bot is running ✅"
 
 def run_flask():
-    # явно выключаем debug/reloader (на всякий случай)
-    app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)
+    app.run(host="0.0.0.0", port=PORT)
 
+Thread(target=run_flask, daemon=True).start()
 
 # --- ФУНКЦИЯ ПРОВЕРКИ САЙТА ---
 async def check_site(bot, name, url, session):
@@ -60,7 +60,6 @@ async def check_site(bot, name, url, session):
     except Exception as e:
         print(f"Ошибка при проверке {name}: {e}")
 
-
 # --- ФОНОВАЯ ЗАДАЧА ---
 async def main_loop(bot):
     global first_run
@@ -75,7 +74,6 @@ async def main_loop(bot):
             first_run = False  # после первой проверки разрешаем уведомления
             await asyncio.sleep(CHECK_INTERVAL)
 
-
 # --- КОМАНДЫ TELEGRAM ---
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_lines = ["✅ Бот запущен и работает!\n"]
@@ -84,21 +82,18 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_lines.append("\nНапиши /commands, чтобы увидеть список команд")
     await update.message.reply_text("\n".join(msg_lines))
 
-
 async def latest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_lines = []
     for name, link in last_seen.items():
         msg_lines.append(f"<b>{name}:</b> {link if link else 'нет данных'}")
     await update.message.reply_text("\n".join(msg_lines), parse_mode=constants.ParseMode.HTML)
 
-
 async def commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "/status — проверить, жив ли бот и время последней проверки\n"
-        "/latest — показать последний заказ/вакансия\n"
+        "/latest — показать последний заказ/вакансию\n"
         "/commands — показать список команд"
     )
-
 
 # --- ЗАПУСК BOT ---
 async def on_startup(bot):
@@ -113,12 +108,7 @@ async def on_startup(bot):
     # Запускаем фоновую задачу
     asyncio.create_task(main_loop(bot))
 
-
 def main():
-    # --- Запускаем Flask-поток здесь (не на уровне модуля) ---
-    Thread(target=run_flask, daemon=True).start()
-    print(f"[{datetime.now().isoformat()}] Flask thread started, PID={os.getpid()}")
-
     app_bot = ApplicationBuilder().token(TOKEN).build()
 
     # Регистрируем команды
@@ -129,14 +119,11 @@ def main():
     # Добавляем on_startup
     app_bot.post_init = lambda app: on_startup(app.bot)
 
-    print(f"[{datetime.now().isoformat()}] Starting bot polling, PID={os.getpid()}")
-    try:
-        # убираем close_loop=False — запускаем обычный polling
-        app_bot.run_polling()
-    except Exception as e:
-        print(f"Bot run_polling exited with exception: {e}")
-        raise
-
+    # Запуск бота
+    app_bot.run_polling(close_loop=False)
 
 if __name__ == "__main__":
-    main()
+    # --- защита от двойного запуска Flask ---
+    import sys
+    if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+        main()
