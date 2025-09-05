@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 from telegram import Update, constants
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from flask import Flask
-from threading import Thread
+from multiprocessing import Process
 from datetime import datetime
 
 # --- НАСТРОЙКИ ---
@@ -32,9 +32,8 @@ def index():
     return "Bot is running ✅"
 
 def run_flask():
-    app.run(host="0.0.0.0", port=PORT)
+    app.run(host="0.0.0.0", port=PORT, threaded=True)
 
-Thread(target=run_flask, daemon=True).start()
 
 # --- ФУНКЦИЯ ПРОВЕРКИ САЙТА ---
 async def check_site(bot, name, url, session):
@@ -60,6 +59,7 @@ async def check_site(bot, name, url, session):
     except Exception as e:
         print(f"Ошибка при проверке {name}: {e}")
 
+
 # --- ФОНОВАЯ ЗАДАЧА ---
 async def main_loop(bot):
     global first_run
@@ -71,8 +71,9 @@ async def main_loop(bot):
                     last_checked[name] = datetime.now()
                 except Exception as e:
                     print(f"Ошибка в main_loop для {name}: {e}")
-            first_run = False  # после первой проверки разрешаем уведомления
+            first_run = False
             await asyncio.sleep(CHECK_INTERVAL)
+
 
 # --- КОМАНДЫ TELEGRAM ---
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -82,11 +83,13 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_lines.append("\nНапиши /commands, чтобы увидеть список команд")
     await update.message.reply_text("\n".join(msg_lines))
 
+
 async def latest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_lines = []
     for name, link in last_seen.items():
         msg_lines.append(f"<b>{name}:</b> {link if link else 'нет данных'}")
     await update.message.reply_text("\n".join(msg_lines), parse_mode=constants.ParseMode.HTML)
+
 
 async def commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -94,6 +97,7 @@ async def commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/latest — показать последний заказ/вакансию\n"
         "/commands — показать список команд"
     )
+
 
 # --- ЗАПУСК BOT ---
 async def on_startup(bot):
@@ -105,8 +109,9 @@ async def on_startup(bot):
         print("Стартовое сообщение отправлено ✅")
     except Exception as e:
         print("Не удалось отправить стартовое сообщение:", e)
-    # Запускаем фоновую задачу
+
     asyncio.create_task(main_loop(bot))
+
 
 def main():
     app_bot = ApplicationBuilder().token(TOKEN).build()
@@ -122,8 +127,10 @@ def main():
     # Запуск бота
     app_bot.run_polling(close_loop=False)
 
+
 if __name__ == "__main__":
-    # --- защита от двойного запуска Flask ---
-    import sys
-    if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
-        main()
+    # --- Запускаем Flask в отдельном процессе ---
+    Process(target=run_flask).start()
+
+    # --- Запускаем Telegram Bot в основном процессе ---
+    main()
