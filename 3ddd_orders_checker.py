@@ -49,7 +49,7 @@ async def check_site(bot, name, url, session):
         title = item.select_one("h3").get_text(strip=True)
         link = "https://3ddd.ru" + item.select_one("a")["href"]
 
-        if last_seen[name] != link:
+        if last_seen[name] != f"{title}\n{link}":
             last_seen[name] = f"{title}\n{link}"
             if not first_run:
                 msg = f"🆕 <b>Новое в разделе {name}:</b>\n{title}\n{link}"
@@ -62,7 +62,7 @@ async def check_site(bot, name, url, session):
 async def fetch_first_item(url):
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
+            async with session.get(url, timeout=10) as response:
                 text = await response.text()
         soup = BeautifulSoup(text, "html.parser")
         item = soup.select_one(".work-list-item")
@@ -78,7 +78,7 @@ async def fetch_first_item(url):
 async def main_loop(bot):
     global first_run
     async with aiohttp.ClientSession() as session:
-        # --- Сразу первая проверка ---
+        # --- Первая проверка сразу при запуске ---
         for name, url in URLS.items():
             try:
                 await check_site(bot, name, url, session)
@@ -108,15 +108,23 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def latest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_lines = []
 
-    # Вакансия
-    if last_seen["Вакансии"]:
+    # --- DEBUG: показать что хранится в last_seen ---
+    debug_lines = ["🛠 DEBUG last_seen:"]
+    for name, val in last_seen.items():
+        debug_lines.append(f"{name}: {val}")
+    debug_text = "\n".join(debug_lines)
+    print(debug_text)  # вывод в консоль Render
+    await update.message.reply_text(debug_text)  # покажем в чате, чтобы видеть прямо
+
+    # --- Вакансия ---
+    if last_seen.get("Вакансии"):
         msg_lines.append(f"<b>Вакансия:</b>\n{last_seen['Вакансии']}")
     else:
         first_vacancy = await fetch_first_item(URLS["Вакансии"])
         msg_lines.append(f"<b>Вакансия:</b>\n{first_vacancy}")
 
-    # Заказ
-    if last_seen["Заказы"]:
+    # --- Заказ ---
+    if last_seen.get("Заказы"):
         msg_lines.append(f"<b>Заказ:</b>\n{last_seen['Заказы']}")
     else:
         first_task = await fetch_first_item(URLS["Заказы"])
