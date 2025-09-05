@@ -35,7 +35,40 @@ def run_flask():
 
 Thread(target=run_flask, daemon=True).start()
 
-# --- ФУНКЦИИ ПРОВЕРКИ САЙТА ---
+# --- ФУНКЦИЯ ДЛЯ ПОЛУЧЕНИЯ ПЕРВОЙ ВАКАНСИИ/ЗАДАЧИ ---
+async def fetch_first_item(url):
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as response:
+                text = await response.text()
+        soup = BeautifulSoup(text, "html.parser")
+        item = soup.select_one(".work-list-item")
+        if item:
+            title = item.select_one("h3").get_text(strip=True)
+            link = "https://3ddd.ru" + item.select_one("a")["href"]
+            return f"{title}\n{link}"
+    except Exception as e:
+        print(f"Ошибка при получении данных с {url}: {e}")
+    return "нет данных"
+
+# --- ИНИЦИАЛИЗАЦИЯ last_seen СРАЗУ ПРИ СТАРТЕ ---
+async def init_last_seen():
+    async with aiohttp.ClientSession() as session:
+        for name, url in URLS.items():
+            try:
+                async with session.get(url, timeout=10) as resp:
+                    text = await resp.text()
+                soup = BeautifulSoup(text, "html.parser")
+                item = soup.select_one(".work-list-item")
+                if item:
+                    title = item.select_one("h3").get_text(strip=True)
+                    link = "https://3ddd.ru" + item.select_one("a")["href"]
+                    last_seen[name] = f"{title}\n{link}"
+                    last_checked[name] = datetime.now()
+            except Exception as e:
+                print(f"Ошибка при init_last_seen для {name}: {e}")
+
+# --- ФУНКЦИЯ ПРОВЕРКИ САЙТА ---
 async def check_site(bot, name, url, session):
     global first_run
     try:
@@ -58,44 +91,19 @@ async def check_site(bot, name, url, session):
     except Exception as e:
         print(f"Ошибка при проверке {name}: {e}")
 
-# --- ФУНКЦИЯ ДЛЯ ПОЛУЧЕНИЯ ПЕРВОЙ ВАКАНСИИ/ЗАДАЧИ ---
-async def fetch_first_item(url):
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10) as response:
-                text = await response.text()
-        soup = BeautifulSoup(text, "html.parser")
-        item = soup.select_one(".work-list-item")
-        if item:
-            title = item.select_one("h3").get_text(strip=True)
-            link = "https://3ddd.ru" + item.select_one("a")["href"]
-            return f"{title}\n{link}"
-    except Exception as e:
-        print(f"Ошибка при получении данных с {url}: {e}")
-    return "нет данных"
-
 # --- ФОНОВАЯ ЗАДАЧА ---
 async def main_loop(bot):
     global first_run
     async with aiohttp.ClientSession() as session:
-        # --- Первая проверка сразу при запуске ---
-        for name, url in URLS.items():
-            try:
-                await check_site(bot, name, url, session)
-                last_checked[name] = datetime.now()
-            except Exception as e:
-                print(f"Ошибка в main_loop для {name}: {e}")
-        first_run = False  # разрешаем уведомления после первой проверки
-
-        # --- Цикл с интервалом ---
         while True:
-            await asyncio.sleep(CHECK_INTERVAL)
             for name, url in URLS.items():
                 try:
                     await check_site(bot, name, url, session)
                     last_checked[name] = datetime.now()
                 except Exception as e:
                     print(f"Ошибка в main_loop для {name}: {e}")
+            first_run = False  # после первой проверки разрешаем уведомления
+            await asyncio.sleep(CHECK_INTERVAL)
 
 # --- КОМАНДЫ TELEGRAM ---
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -141,6 +149,9 @@ async def commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- ЗАПУСК BOT ---
 async def on_startup(bot):
+    # --- Инициализируем last_seen перед запуском main_loop ---
+    await init_last_seen()
+
     try:
         await bot.send_message(
             chat_id=CHAT_ID,
