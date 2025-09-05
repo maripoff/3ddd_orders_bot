@@ -2,4 +2,3 @@ aiohttp
 beautifulsoup4
 python-telegram-bot==22.3
 Flask
-nest_asyncio
