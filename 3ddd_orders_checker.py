@@ -21,7 +21,7 @@ URLS = {
 
 # --- ИНИЦИАЛИЗАЦИЯ ---
 last_seen = {name: None for name in URLS}
-last_checked = {name: None for name in URLS}  # новое: время последней проверки
+last_checked = {name: None for name in URLS}
 
 # --- FLASK ДЛЯ RENDER ---
 app = Flask(__name__)
@@ -64,7 +64,7 @@ async def main_loop(bot):
             for name, url in URLS.items():
                 try:
                     await check_site(bot, name, url, session)
-                    last_checked[name] = datetime.now()  # фиксируем время проверки
+                    last_checked[name] = datetime.now()
                 except Exception as e:
                     print(f"Ошибка в main_loop для {name}: {e}")
             await asyncio.sleep(CHECK_INTERVAL)
@@ -106,7 +106,7 @@ async def runner():
     app_bot.add_handler(CommandHandler("latest", latest))
     app_bot.add_handler(CommandHandler("commands", commands))
 
-    # Стартовое сообщение и запуск фонового цикла
+    # Стартовое сообщение и фоновая проверка
     async def startup_tasks():
         try:
             await app_bot.bot.send_message(
@@ -120,12 +120,11 @@ async def runner():
         # Фоновая проверка сайта
         asyncio.create_task(main_loop(app_bot.bot))
 
-    # Инициализация бота и запуск startup tasks
     await app_bot.initialize()
     await startup_tasks()
 
-    # Запуск polling — Telegram команды будут работать параллельно
-    await app_bot.run_polling(stop_signals=None)
+    # --- ПРАВИЛЬНЫЙ ПОЛЛИНГ ---
+    await app_bot.run_polling()
 
 # --- ОСНОВНОЙ ---
 if __name__ == "__main__":
