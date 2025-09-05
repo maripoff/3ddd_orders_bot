@@ -94,8 +94,8 @@ async def runner():
     app_bot.add_handler(CommandHandler("latest", latest))
     app_bot.add_handler(CommandHandler("commands", commands))
 
-    # Стартовое сообщение после полной инициализации бота
-    async def on_startup():
+    # Отправка стартового сообщения и запуск фонового цикла
+    async def startup_tasks():
         try:
             await app_bot.bot.send_message(
                 chat_id=CHAT_ID,
@@ -105,15 +105,20 @@ async def runner():
         except Exception as e:
             print("Не удалось отправить стартовое сообщение:", e)
 
-        # Запускаем фоновую проверку
         asyncio.create_task(main_loop(app_bot.bot))
 
-    # Добавляем обработчик on_startup
-    app_bot.post_init = on_startup
+    # Запускаем startup tasks после инициализации бота
+    await app_bot.initialize()
+    await startup_tasks()
 
-    # Запускаем polling (Telegram команды)
-    await app_bot.run_polling(stop_signals=None)
+    # Запускаем polling
+    await app_bot.start()
+    await app_bot.updater.start_polling()
+    await app_bot.updater.idle()
+    await app_bot.stop()
 
 # --- ОСНОВНОЙ ---
 if __name__ == "__main__":
-    asyncio.run(runner())
+    loop = asyncio.get_event_loop()
+    loop.create_task(runner())
+    loop.run_forever()
