@@ -96,15 +96,20 @@ async def commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # --- ЗАПУСК BOT ---
+started = False  # Флаг для проверки, был ли уже отправлен стартовый запрос
+
 async def on_startup(bot):
-    try:
-        await bot.send_message(
-            chat_id=CHAT_ID,
-            text="✅ Бот запущен и работает!\nНапиши /commands, чтобы увидеть список доступных команд"
-        )
-        print("Стартовое сообщение отправлено ✅")
-    except Exception as e:
-        print("Не удалось отправить стартовое сообщение:", e)
+    global started
+    if not started:
+        try:
+            await bot.send_message(
+                chat_id=CHAT_ID,
+                text="✅ Бот запущен и работает!\nНапиши /commands, чтобы увидеть список доступных команд"
+            )
+            print("Стартовое сообщение отправлено ✅")
+            started = True  # Устанавливаем флаг, чтобы избежать повторного запуска
+        except Exception as e:
+            print("Не удалось отправить стартовое сообщение:", e)
     # Запускаем фоновую задачу
     asyncio.create_task(main_loop(bot))
 
