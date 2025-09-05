@@ -42,10 +42,16 @@ async def check_site(bot, name, url, session):
     try:
         async with session.get(url) as response:
             text = await response.text()
+
+        # Логируем HTML, чтобы проверить, что приходит с сайта
+        print(f"--- HTML для {name} ---")
+        print(text[:1000])  # Печатаем первые 1000 символов HTML для диагностики
+
         soup = BeautifulSoup(text, "html.parser")
-        item = soup.select_one(".work-list-item")
+        item = soup.select_one(".work-list-item")  # Если страница загружена динамически, нужно будет изменить селектор
+
         if not item:
-            return None, None  # Возвращаем None, если нет данных
+            return None, None  # Если элемента нет, возвращаем None
 
         title = item.select_one("h3").get_text(strip=True)
         link = "https://3ddd.ru" + item.select_one("a")["href"]
@@ -70,8 +76,14 @@ async def main_loop(bot):
         while True:
             for name, url in URLS.items():
                 try:
-                    await check_site(bot, name, url, session)
+                    title, link = await check_site(bot, name, url, session)
                     last_checked[name] = datetime.now()
+                    if first_run:
+                        # Если первый запуск, сразу показываем заголовки первой вакансии и первого заказа
+                        if name == "Вакансии" and title:
+                            last_seen["Вакансии"] = title
+                        if name == "Заказы" and title:
+                            last_seen["Заказы"] = title
                 except Exception as e:
                     print(f"Ошибка в main_loop для {name}: {e}")
             first_run = False  # после первой проверки разрешаем уведомления
@@ -87,16 +99,8 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def latest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_lines = []
-    
-    # Получаем первую вакансию и заказ
-    async with aiohttp.ClientSession() as session:
-        vacancy_title, vacancy_link = await check_site(update.bot, "Вакансии", URLS["Вакансии"], session)
-        task_title, task_link = await check_site(update.bot, "Заказы", URLS["Заказы"], session)
-
-    # Показываем данные, если они есть
-    msg_lines.append(f"<b>Вакансия:</b> {vacancy_title if vacancy_title else 'Нет данных'}")
-    msg_lines.append(f"<b>Заказ:</b> {task_title if task_title else 'Нет данных'}")
-    
+    for name, link in last_seen.items():
+        msg_lines.append(f"<b>{name}:</b> {link if link else 'нет данных'}")
     await update.message.reply_text("\n".join(msg_lines), parse_mode=constants.ParseMode.HTML)
 
 async def commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -107,28 +111,15 @@ async def commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # --- ЗАПУСК BOT ---
-started = False  # Флаг для проверки, был ли уже отправлен стартовый запрос
-
 async def on_startup(bot):
-    global started
-    if not started:
-        try:
-            # Выполняем сразу первую проверку для получения первых вакансий и заказов
-            async with aiohttp.ClientSession() as session:
-                vacancy_title, _ = await check_site(bot, "Вакансии", URLS["Вакансии"], session)
-                task_title, _ = await check_site(bot, "Заказы", URLS["Заказы"], session)
-
-            await bot.send_message(
-                chat_id=CHAT_ID,
-                text=f"✅ Бот запущен и работает!\n\n"
-                     f"Первая вакансия: {vacancy_title if vacancy_title else 'Нет данных'}\n"
-                     f"Первый заказ: {task_title if task_title else 'Нет данных'}\n"
-                     "Напиши /commands, чтобы увидеть список доступных команд"
-            )
-            print("Стартовое сообщение отправлено ✅")
-            started = True  # Устанавливаем флаг, чтобы избежать повторного запуска
-        except Exception as e:
-            print("Не удалось отправить стартовое сообщение:", e)
+    try:
+        await bot.send_message(
+            chat_id=CHAT_ID,
+            text="✅ Бот запущен и работает!\nНапиши /commands, чтобы увидеть список доступных команд"
+        )
+        print("Стартовое сообщение отправлено ✅")
+    except Exception as e:
+        print("Не удалось отправить стартовое сообщение:", e)
     # Запускаем фоновую задачу
     asyncio.create_task(main_loop(bot))
 
