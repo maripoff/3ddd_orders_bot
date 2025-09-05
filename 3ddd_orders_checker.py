@@ -123,16 +123,11 @@ async def runner():
     await app_bot.initialize()
     await startup_tasks()
 
-    # --- ПРАВИЛЬНЫЙ ПОЛЛИНГ ---
-    await app_bot.run_polling()
+    # --- ПРАВИЛЬНЫЙ ПОЛЛИНГ ДЛЯ RENDER ---
+    # Используем run_polling с close_loop=False, чтобы не закрывал существующий loop
+    await app_bot.run_polling(close_loop=False)
 
 # --- ОСНОВНОЙ ---
 if __name__ == "__main__":
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-    loop.create_task(runner())
-    loop.run_forever()
+    # просто запускаем runner(), не создаём свой loop вручную
+    asyncio.run(runner())
