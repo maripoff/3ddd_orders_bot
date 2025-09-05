@@ -2,103 +2,130 @@ import os
 import asyncio
 import aiohttp
 from bs4 import BeautifulSoup
-from telegram import Bot
-from telegram.ext import Application, CommandHandler
+from telegram import Update, constants
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from flask import Flask
 from threading import Thread
+from datetime import datetime
 
+# --- НАСТРОЙКИ ---
 TOKEN = os.environ.get("TOKEN")
 CHAT_ID = int(os.environ.get("CHAT_ID"))
+CHECK_INTERVAL = 300  # каждые 5 минут
+PORT = int(os.environ.get("PORT", 10000))
 
-VACANCIES_URL = "https://3ddd.ru/work/vacancies"
-TASKS_URL = "https://3ddd.ru/work/tasks"
+URLS = {
+    "Вакансии": "https://3ddd.ru/work/vacancies",
+    "Заказы": "https://3ddd.ru/work/tasks",
+}
 
+last_seen = {name: None for name in URLS}
+last_checked = {name: None for name in URLS}
+
+first_run = True  # флаг для предотвращения рассылки при старте
+
+# --- FLASK ДЛЯ RENDER ---
 app = Flask(__name__)
 
-# --- Функции для парсинга ---
-async def fetch_page(session, url):
+@app.route("/")
+def index():
+    return "Bot is running ✅"
+
+def run_flask():
+    app.run(host="0.0.0.0", port=PORT)
+
+Thread(target=run_flask, daemon=True).start()
+
+# --- ФУНКЦИЯ ПРОВЕРКИ САЙТА ---
+async def check_site(bot, name, url, session):
+    global first_run
     try:
         async with session.get(url) as response:
-            return await response.text()
+            text = await response.text()
+        soup = BeautifulSoup(text, "html.parser")
+        item = soup.select_one(".work-list-item")
+        if not item:
+            return
+
+        title = item.select_one("h3").get_text(strip=True)
+        link = "https://3ddd.ru" + item.select_one("a")["href"]
+
+        if last_seen[name] != link:
+            last_seen[name] = link
+            # отправляем сообщения только если это не первый запуск
+            if not first_run:
+                msg = f"🆕 <b>Новое в разделе {name}:</b>\n{title}\n{link}"
+                await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode=constants.ParseMode.HTML)
+                print("Отправлено сообщение:", msg)
     except Exception as e:
-        print(f"Ошибка при загрузке {url}: {e}")
-        return ""
+        print(f"Ошибка при проверке {name}: {e}")
 
-async def get_latest_vacancy_and_task():
+# --- ФОНОВАЯ ЗАДАЧА ---
+async def main_loop(bot):
+    global first_run
     async with aiohttp.ClientSession() as session:
-        # --- Вакансия ---
-        vac_html = await fetch_page(session, VACANCIES_URL)
-        vac_soup = BeautifulSoup(vac_html, "html.parser")
-        vac_elem = vac_soup.select_one(".b-vacancies__item a")
-        if vac_elem:
-            vac_title = vac_elem.get_text(strip=True)
-            vac_link = "https://3ddd.ru" + vac_elem.get("href")
-        else:
-            vac_title = "нет данных"
-            vac_link = ""
+        while True:
+            for name, url in URLS.items():
+                try:
+                    await check_site(bot, name, url, session)
+                    last_checked[name] = datetime.now()
+                except Exception as e:
+                    print(f"Ошибка в main_loop для {name}: {e}")
+            first_run = False  # после первой проверки разрешаем уведомления
+            await asyncio.sleep(CHECK_INTERVAL)
 
-        # --- Заказ/задача ---
-        task_html = await fetch_page(session, TASKS_URL)
-        task_soup = BeautifulSoup(task_html, "html.parser")
-        task_elem = task_soup.select_one(".b-orders__item a")
-        if task_elem:
-            task_title = task_elem.get_text(strip=True)
-            task_link = "https://3ddd.ru" + task_elem.get("href")
-        else:
-            task_title = "нет данных"
-            task_link = ""
+# --- КОМАНДЫ TELEGRAM ---
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg_lines = ["✅ Бот запущен и работает!\n"]
+    for name, checked in last_checked.items():
+        msg_lines.append(f"{name}: {checked.strftime('%Y-%m-%d %H:%M:%S') if checked else 'ещё не проверялось'}")
+    msg_lines.append("\nНапиши /commands, чтобы увидеть список команд")
+    await update.message.reply_text("\n".join(msg_lines))
 
-        return (vac_title, vac_link), (task_title, task_link)
+async def latest(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg_lines = []
+    for name, link in last_seen.items():
+        msg_lines.append(f"<b>{name}:</b> {link if link else 'нет данных'}")
+    await update.message.reply_text("\n".join(msg_lines), parse_mode=constants.ParseMode.HTML)
 
-# --- Telegram команды ---
-async def latest(update, context):
-    (vac_title, vac_link), (task_title, task_link) = await get_latest_vacancy_and_task()
-    msg = f"Вакансия:\n{vac_title}\n{vac_link}\n\nЗаказ:\n{task_title}\n{task_link}"
-    await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
-
-async def commands(update, context):
-    msg = (
-        "/status — проверить, жив ли бот\n"
+async def commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "/status — проверить, жив ли бот и время последней проверки\n"
         "/latest — показать последний заказ/вакансию\n"
         "/commands — показать список команд"
     )
-    await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
 
-async def status(update, context):
-    await context.bot.send_message(chat_id=update.effective_chat.id, text="✅ Бот запущен и работает!")
-
-# --- Отправка стартового сообщения ---
-async def send_start_message(bot: Bot):
+# --- ЗАПУСК BOT ---
+async def on_startup(bot):
     try:
-        await bot.send_message(chat_id=CHAT_ID, text="Стартовое сообщение отправлено ✅")
+        await bot.send_message(
+            chat_id=CHAT_ID,
+            text="✅ Бот запущен и работает!\nНапиши /commands, чтобы увидеть список доступных команд"
+        )
         print("Стартовое сообщение отправлено ✅")
     except Exception as e:
-        print(f"Ошибка при отправке стартового сообщения: {e}")
+        print("Не удалось отправить стартовое сообщение:", e)
+    # Запускаем фоновую задачу
+    asyncio.create_task(main_loop(bot))
 
-# --- Flask ---
-@app.route("/")
-def index():
-    return "Bot is running!"
+def main():
+    app_bot = ApplicationBuilder().token(TOKEN).build()
 
-def start_flask():
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
-
-# --- Основная функция ---
-async def main():
-    app_bot = Application.builder().token(TOKEN).build()
-    # Регистрация команд
+    # Регистрируем команды
+    app_bot.add_handler(CommandHandler("status", status))
     app_bot.add_handler(CommandHandler("latest", latest))
     app_bot.add_handler(CommandHandler("commands", commands))
-    app_bot.add_handler(CommandHandler("status", status))
 
-    # Стартовое сообщение
-    await send_start_message(app_bot.bot)
+    # Добавляем on_startup
+    app_bot.post_init = lambda app: on_startup(app.bot)
 
-    # Бот живет до остановки процесса
-    await asyncio.Event().wait()
+    # Запуск бота (не оборачиваем в asyncio.run)
+    app_bot.run_polling(close_loop=False)
 
 if __name__ == "__main__":
-    # Flask в отдельном потоке
-    Thread(target=start_flask, daemon=True).start()
-    # Запуск Telegram
-    asyncio.run(main())
+    # --- защита от двойного запуска (Flask иногда дергает main дважды) ---
+    import sys
+    if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+        sys.exit(0)
+
+    main()
