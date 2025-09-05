@@ -123,4 +123,9 @@ def main():
     app_bot.run_polling(close_loop=False)
 
 if __name__ == "__main__":
+    # --- защита от двойного запуска (Flask иногда дергает main дважды) ---
+    import sys
+    if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+        sys.exit(0)
+
     main()
