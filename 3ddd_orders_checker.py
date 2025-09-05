@@ -1,13 +1,16 @@
 import os
 import asyncio
+import threading
 import requests
 from bs4 import BeautifulSoup
 from telegram import Bot
+from flask import Flask
 
 # --- НАСТРОЙКИ ---
-TOKEN = os.environ.get("TOKEN")  # Берём токен из переменных окружения
-CHAT_ID = int(os.environ.get("CHAT_ID"))  # Берём chat_id из переменных окружения
+TOKEN = os.environ.get("TOKEN")  # токен из переменных окружения
+CHAT_ID = int(os.environ.get("CHAT_ID"))  # chat_id из переменных окружения
 CHECK_INTERVAL = 300  # проверка каждые 5 минут
+PORT = int(os.environ.get("PORT", 10000))  # порт для Render Web Service
 
 URLS = {
     "Вакансии": "https://3ddd.ru/work/vacancies",
@@ -48,6 +51,19 @@ async def main_loop():
             await check_site(name, url)
         await asyncio.sleep(CHECK_INTERVAL)
 
+# --- MИНИ ВЕБ-СЕРВЕР ДЛЯ Render ---
+app = Flask(__name__)
+
+@app.route("/")
+def index():
+    return "Bot is running ✅"
+
+def run_flask():
+    app.run(host="0.0.0.0", port=PORT)
+
 # --- ЗАПУСК ---
 if __name__ == "__main__":
+    # Flask в отдельном потоке, чтобы Web Service видел порт
+    threading.Thread(target=run_flask).start()
+    # Асинхронный цикл бота
     asyncio.run(main_loop())
