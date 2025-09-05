@@ -116,14 +116,6 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def latest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_lines = []
 
-    # --- DEBUG: показать что хранится в last_seen ---
-    debug_lines = ["🛠 DEBUG last_seen:"]
-    for name, val in last_seen.items():
-        debug_lines.append(f"{name}: {val}")
-    debug_text = "\n".join(debug_lines)
-    print(debug_text)  # вывод в консоль Render
-    await update.message.reply_text(debug_text)  # покажем в чате, чтобы видеть прямо
-
     # --- Вакансия ---
     if last_seen.get("Вакансии"):
         msg_lines.append(f"<b>Вакансия:</b>\n{last_seen['Вакансии']}")
@@ -149,8 +141,9 @@ async def commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- ЗАПУСК BOT ---
 async def on_startup(bot):
-    # --- Инициализируем last_seen перед запуском main_loop ---
-    await init_last_seen()
+    print("Инициализация данных...")
+    await init_last_seen()  # ждем завершения инициализации перед запуском команд
+    print("Данные инициализированы.")
 
     try:
         await bot.send_message(
