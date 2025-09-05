@@ -6,6 +6,7 @@ from telegram import Update, constants
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from flask import Flask
 from threading import Thread
+from datetime import datetime
 
 # --- НАСТРОЙКИ ---
 TOKEN = os.environ.get("TOKEN")
@@ -20,6 +21,7 @@ URLS = {
 
 # --- ИНИЦИАЛИЗАЦИЯ ---
 last_seen = {name: None for name in URLS}
+last_checked = {name: None for name in URLS}  # новое: время последней проверки
 
 # --- FLASK ДЛЯ RENDER ---
 app = Flask(__name__)
@@ -60,14 +62,24 @@ async def main_loop(bot):
     async with aiohttp.ClientSession() as session:
         while True:
             for name, url in URLS.items():
-                await check_site(bot, name, url, session)
+                try:
+                    await check_site(bot, name, url, session)
+                    last_checked[name] = datetime.now()  # фиксируем время проверки
+                except Exception as e:
+                    print(f"Ошибка в main_loop для {name}: {e}")
             await asyncio.sleep(CHECK_INTERVAL)
 
 # --- КОМАНДЫ TELEGRAM ---
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "✅ Бот запущен и работает!\nНапиши /commands, чтобы увидеть список команд"
-    )
+    msg_lines = ["✅ Бот запущен и работает!\n"]
+    for name, checked in last_checked.items():
+        if checked:
+            time_str = checked.strftime("%Y-%m-%d %H:%M:%S")
+            msg_lines.append(f"{name}: последняя проверка {time_str}")
+        else:
+            msg_lines.append(f"{name}: ещё не проверялось")
+    msg_lines.append("\nНапиши /commands, чтобы увидеть список команд")
+    await update.message.reply_text("\n".join(msg_lines))
 
 async def latest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_lines = []
@@ -80,7 +92,7 @@ async def latest(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "/status — проверить, жив ли бот\n"
+        "/status — проверить, жив ли бот и время последней проверки\n"
         "/latest — показать последний заказ/вакансию\n"
         "/commands — показать список команд"
     )
@@ -94,7 +106,7 @@ async def runner():
     app_bot.add_handler(CommandHandler("latest", latest))
     app_bot.add_handler(CommandHandler("commands", commands))
 
-    # Отправка стартового сообщения и запуск фонового цикла
+    # Стартовое сообщение и запуск фонового цикла
     async def startup_tasks():
         try:
             await app_bot.bot.send_message(
@@ -105,20 +117,23 @@ async def runner():
         except Exception as e:
             print("Не удалось отправить стартовое сообщение:", e)
 
+        # Фоновая проверка сайта
         asyncio.create_task(main_loop(app_bot.bot))
 
-    # Запускаем startup tasks после инициализации бота
+    # Инициализация бота и запуск startup tasks
     await app_bot.initialize()
     await startup_tasks()
 
-    # Запускаем polling
-    await app_bot.start()
-    await app_bot.updater.start_polling()
-    await app_bot.updater.idle()
-    await app_bot.stop()
+    # Запуск polling — Telegram команды будут работать параллельно
+    await app_bot.run_polling(stop_signals=None)
 
 # --- ОСНОВНОЙ ---
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
     loop.create_task(runner())
     loop.run_forever()
