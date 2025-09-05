@@ -19,7 +19,6 @@ URLS = {
     "Заказы": "https://3ddd.ru/work/tasks",
 }
 
-# --- ИНИЦИАЛИЗАЦИЯ ---
 last_seen = {name: None for name in URLS}
 last_checked = {name: None for name in URLS}
 
@@ -43,7 +42,7 @@ async def check_site(bot, name, url, session):
         soup = BeautifulSoup(text, "html.parser")
         item = soup.select_one(".work-list-item")
         if not item:
-            return None
+            return
 
         title = item.select_one("h3").get_text(strip=True)
         link = "https://3ddd.ru" + item.select_one("a")["href"]
@@ -53,12 +52,12 @@ async def check_site(bot, name, url, session):
             msg = f"🆕 <b>Новое в разделе {name}:</b>\n{title}\n{link}"
             await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode=constants.ParseMode.HTML)
             print("Отправлено сообщение:", msg)
-            return msg
     except Exception as e:
         print(f"Ошибка при проверке {name}: {e}")
 
-# --- АСИНХРОННЫЙ ЦИКЛ ---
+# --- ФОНОВАЯ ЗАДАЧА ---
 async def main_loop(bot):
+    await asyncio.sleep(5)  # небольшая задержка на старт
     async with aiohttp.ClientSession() as session:
         while True:
             for name, url in URLS.items():
@@ -73,21 +72,14 @@ async def main_loop(bot):
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_lines = ["✅ Бот запущен и работает!\n"]
     for name, checked in last_checked.items():
-        if checked:
-            time_str = checked.strftime("%Y-%m-%d %H:%M:%S")
-            msg_lines.append(f"{name}: последняя проверка {time_str}")
-        else:
-            msg_lines.append(f"{name}: ещё не проверялось")
+        msg_lines.append(f"{name}: {checked.strftime('%Y-%m-%d %H:%M:%S') if checked else 'ещё не проверялось'}")
     msg_lines.append("\nНапиши /commands, чтобы увидеть список команд")
     await update.message.reply_text("\n".join(msg_lines))
 
 async def latest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_lines = []
     for name, link in last_seen.items():
-        if link:
-            msg_lines.append(f"<b>{name}:</b> {link}")
-        else:
-            msg_lines.append(f"<b>{name}:</b> нет данных")
+        msg_lines.append(f"<b>{name}:</b> {link if link else 'нет данных'}")
     await update.message.reply_text("\n".join(msg_lines), parse_mode=constants.ParseMode.HTML)
 
 async def commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -98,7 +90,19 @@ async def commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # --- ЗАПУСК BOT ---
-async def runner():
+async def on_startup(bot):
+    try:
+        await bot.send_message(
+            chat_id=CHAT_ID,
+            text="✅ Бот запущен и работает!\nНапиши /commands, чтобы увидеть список доступных команд"
+        )
+        print("Стартовое сообщение отправлено ✅")
+    except Exception as e:
+        print("Не удалось отправить стартовое сообщение:", e)
+    # Запускаем фоновую задачу
+    asyncio.create_task(main_loop(bot))
+
+def main():
     app_bot = ApplicationBuilder().token(TOKEN).build()
 
     # Регистрируем команды
@@ -106,28 +110,11 @@ async def runner():
     app_bot.add_handler(CommandHandler("latest", latest))
     app_bot.add_handler(CommandHandler("commands", commands))
 
-    # Стартовое сообщение и фоновая проверка
-    async def startup_tasks():
-        try:
-            await app_bot.bot.send_message(
-                chat_id=CHAT_ID,
-                text="✅ Бот запущен и работает!\nНапиши /commands, чтобы увидеть список доступных команд"
-            )
-            print("Стартовое сообщение отправлено ✅")
-        except Exception as e:
-            print("Не удалось отправить стартовое сообщение:", e)
+    # Добавляем on_startup
+    app_bot.post_init = lambda app: on_startup(app.bot)
 
-        # Фоновая проверка сайта
-        asyncio.create_task(main_loop(app_bot.bot))
+    # Запуск бота (не оборачиваем в asyncio.run)
+    app_bot.run_polling(close_loop=False)
 
-    await app_bot.initialize()
-    await startup_tasks()
-
-    # --- ПРАВИЛЬНЫЙ ПОЛЛИНГ ДЛЯ RENDER ---
-    # Используем run_polling с close_loop=False, чтобы не закрывал существующий loop
-    await app_bot.run_polling(close_loop=False)
-
-# --- ОСНОВНОЙ ---
 if __name__ == "__main__":
-    # просто запускаем runner(), не создаём свой loop вручную
-    asyncio.run(runner())
+    main()
