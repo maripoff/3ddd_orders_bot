@@ -19,9 +19,12 @@ URLS = {
     "Заказы": "https://3ddd.ru/work/tasks",
 }
 
-last_seen = {name: None for name in URLS}
-last_checked = {name: None for name in URLS}
-first_run = True  # предотвращает рассылку сообщений при старте
+# --- КЭШ ---
+cache = {
+    "Вакансии": None,
+    "Заказы": None,
+    "last_checked": {name: None for name in URLS}
+}
 
 # --- FLASK ---
 app = Flask(__name__)
@@ -35,12 +38,12 @@ def run_flask():
 
 Thread(target=run_flask, daemon=True).start()
 
-# --- ФУНКЦИЯ ДЛЯ ПОЛУЧЕНИЯ ПЕРВОЙ ВАКАНСИИ/ЗАДАЧИ ---
+# --- ПОЛУЧЕНИЕ ПЕРВОЙ ВАКАНСИИ/ЗАДАЧИ ---
 async def fetch_first_item(url):
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10) as response:
-                text = await response.text()
+            async with session.get(url, timeout=10) as resp:
+                text = await resp.text()
         soup = BeautifulSoup(text, "html.parser")
         item = soup.select_one(".work-list-item")
         if item:
@@ -48,11 +51,11 @@ async def fetch_first_item(url):
             link = "https://3ddd.ru" + item.select_one("a")["href"]
             return f"{title}\n{link}"
     except Exception as e:
-        print(f"Ошибка при получении данных с {url}: {e}")
-    return "нет данных"
+        print(f"Ошибка при fetch_first_item для {url}: {e}")
+    return None
 
-# --- ИНИЦИАЛИЗАЦИЯ last_seen СРАЗУ ПРИ СТАРТЕ ---
-async def init_last_seen():
+# --- ПРОВЕРКА САЙТА И ОБНОВЛЕНИЕ КЭША ---
+async def check_site(bot):
     async with aiohttp.ClientSession() as session:
         for name, url in URLS.items():
             try:
@@ -60,116 +63,86 @@ async def init_last_seen():
                     text = await resp.text()
                 soup = BeautifulSoup(text, "html.parser")
                 item = soup.select_one(".work-list-item")
-                if item:
-                    title = item.select_one("h3").get_text(strip=True)
-                    link = "https://3ddd.ru" + item.select_one("a")["href"]
-                    last_seen[name] = f"{title}\n{link}"
-                    last_checked[name] = datetime.now()
+                if not item:
+                    continue
+
+                title = item.select_one("h3").get_text(strip=True)
+                link = "https://3ddd.ru" + item.select_one("a")["href"]
+                new_value = f"{title}\n{link}"
+
+                # проверка на обновление
+                if cache[name] != new_value:
+                    cache[name] = new_value
+                    if cache["last_checked"][name] is not None:  # пропускаем уведомление при первом старте
+                        msg = f"🆕 <b>Новое в разделе {name}:</b>\n{title}\n{link}"
+                        await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode=constants.ParseMode.HTML)
+                        print(f"[{datetime.now()}] Отправлено сообщение: {msg}")
+
+                cache["last_checked"][name] = datetime.now()
             except Exception as e:
-                print(f"Ошибка при init_last_seen для {name}: {e}")
-
-# --- ФУНКЦИЯ ПРОВЕРКИ САЙТА ---
-async def check_site(bot, name, url, session):
-    global first_run
-    try:
-        async with session.get(url) as response:
-            text = await response.text()
-        soup = BeautifulSoup(text, "html.parser")
-        item = soup.select_one(".work-list-item")
-        if not item:
-            return
-
-        title = item.select_one("h3").get_text(strip=True)
-        link = "https://3ddd.ru" + item.select_one("a")["href"]
-
-        if last_seen[name] != f"{title}\n{link}":
-            last_seen[name] = f"{title}\n{link}"
-            if not first_run:
-                msg = f"🆕 <b>Новое в разделе {name}:</b>\n{title}\n{link}"
-                await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode=constants.ParseMode.HTML)
-                print(f"[{datetime.now()}] Отправлено сообщение: {msg}")
-    except Exception as e:
-        print(f"Ошибка при проверке {name}: {e}")
+                print(f"Ошибка при check_site для {name}: {e}")
 
 # --- ФОНОВАЯ ЗАДАЧА ---
-async def main_loop(bot):
-    global first_run
-    async with aiohttp.ClientSession() as session:
-        while True:
-            for name, url in URLS.items():
-                try:
-                    await check_site(bot, name, url, session)
-                    last_checked[name] = datetime.now()
-                except Exception as e:
-                    print(f"Ошибка в main_loop для {name}: {e}")
-            first_run = False  # после первой проверки разрешаем уведомления
-            await asyncio.sleep(CHECK_INTERVAL)
+async def background_loop(bot):
+    while True:
+        await check_site(bot)
+        await asyncio.sleep(CHECK_INTERVAL)
 
-# --- КОМАНДЫ TELEGRAM ---
+# --- КОМАНДЫ ---
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg_lines = ["✅ Бот запущен и работает!\n"]
-    for name, checked in last_checked.items():
-        msg_lines.append(f"{name}: {checked.strftime('%Y-%m-%d %H:%M:%S') if checked else 'ещё не проверялось'}")
-    msg_lines.append("\nНапиши /commands, чтобы увидеть список команд")
-    await update.message.reply_text("\n".join(msg_lines))
+    lines = ["✅ Бот запущен и работает!\n"]
+    for name, checked in cache["last_checked"].items():
+        lines.append(f"{name}: {checked.strftime('%Y-%m-%d %H:%M:%S') if checked else 'ещё не проверялось'}")
+    lines.append("\nНапиши /commands для списка команд")
+    await update.message.reply_text("\n".join(lines))
 
 async def latest(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg_lines = []
-
-    # --- Вакансия ---
-    if last_seen.get("Вакансии"):
-        msg_lines.append(f"<b>Вакансия:</b>\n{last_seen['Вакансии']}")
-    else:
-        first_vacancy = await fetch_first_item(URLS["Вакансии"])
-        msg_lines.append(f"<b>Вакансия:</b>\n{first_vacancy}")
-
-    # --- Заказ ---
-    if last_seen.get("Заказы"):
-        msg_lines.append(f"<b>Заказ:</b>\n{last_seen['Заказы']}")
-    else:
-        first_task = await fetch_first_item(URLS["Заказы"])
-        msg_lines.append(f"<b>Заказ:</b>\n{first_task}")
-
-    await update.message.reply_text("\n\n".join(msg_lines), parse_mode=constants.ParseMode.HTML)
+    lines = []
+    for name in ["Вакансии", "Заказы"]:
+        if cache[name]:
+            lines.append(f"<b>{name}:</b>\n{cache[name]}")
+        else:
+            lines.append(f"<b>{name}:</b>\nДанные загружаются...")
+    await update.message.reply_text("\n\n".join(lines), parse_mode=constants.ParseMode.HTML)
 
 async def commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "/status — проверить, жив ли бот и время последней проверки\n"
+        "/status — проверить состояние бота\n"
         "/latest — показать последний заказ/вакансию\n"
         "/commands — показать список команд"
     )
 
-# --- ЗАПУСК BOT ---
-async def on_startup(bot):
-    print("Инициализация данных...")
-    await init_last_seen()  # ждем завершения инициализации перед запуском команд
-    print("Данные инициализированы.")
-
-    try:
-        await bot.send_message(
-            chat_id=CHAT_ID,
-            text="✅ Бот запущен и работает!\nНапиши /commands, чтобы увидеть список доступных команд"
-        )
-        print("Стартовое сообщение отправлено ✅")
-    except Exception as e:
-        print("Не удалось отправить стартовое сообщение:", e)
-
-    # Запускаем фоновую задачу
-    asyncio.create_task(main_loop(bot))
-
-def main():
+# --- ЗАПУСК ---
+async def main():
     app_bot = ApplicationBuilder().token(TOKEN).build()
-
-    # Регистрируем команды
     app_bot.add_handler(CommandHandler("status", status))
     app_bot.add_handler(CommandHandler("latest", latest))
     app_bot.add_handler(CommandHandler("commands", commands))
 
-    # on_startup
-    app_bot.post_init = lambda app: on_startup(app.bot)
+    # --- Инициализация кэша до старта бота ---
+    for name, url in URLS.items():
+        first_item = await fetch_first_item(url)
+        if first_item:
+            cache[name] = first_item
+            cache["last_checked"][name] = datetime.now()
 
-    # Запуск polling
-    app_bot.run_polling(close_loop=False)
+    # --- Стартовое сообщение ---
+    try:
+        await app_bot.bot.send_message(
+            chat_id=CHAT_ID,
+            text="✅ Бот запущен и работает!\nНапиши /commands для списка команд"
+        )
+        print("Стартовое сообщение отправлено ✅")
+    except Exception as e:
+        print(f"Не удалось отправить стартовое сообщение: {e}")
+
+    # --- Запуск фонового цикла ---
+    asyncio.create_task(background_loop(app_bot.bot))
+
+    # --- Запуск polling ---
+    await app_bot.start()
+    await app_bot.updater.start_polling()
+    await app_bot.idle()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
