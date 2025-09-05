@@ -8,10 +8,10 @@ from flask import Flask
 from threading import Thread
 
 # --- НАСТРОЙКИ ---
-TOKEN = os.environ.get("TOKEN")  # токен из переменных окружения
-CHAT_ID = int(os.environ.get("CHAT_ID"))  # chat_id из переменных окружения
-CHECK_INTERVAL = 300  # проверка каждые 5 минут
-PORT = int(os.environ.get("PORT", 10000))  # порт для Render Web Service
+TOKEN = os.environ.get("TOKEN")
+CHAT_ID = int(os.environ.get("CHAT_ID"))
+CHECK_INTERVAL = 300  # каждые 5 минут
+PORT = int(os.environ.get("PORT", 10000))
 
 URLS = {
     "Вакансии": "https://3ddd.ru/work/vacancies",
@@ -19,16 +19,14 @@ URLS = {
 }
 
 # --- ИНИЦИАЛИЗАЦИЯ ---
-bot = Bot(token=TOKEN, parse_mode=ParseMode.HTML)
+bot = Bot(token=TOKEN)  # parse_mode убрали из конструктора
 last_seen = {name: None for name in URLS}
 
 # --- ФУНКЦИЯ ПРОВЕРКИ САЙТА ---
-async def check_site(name, url):
-    global last_seen
+async def check_site(name, url, session):
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
-                text = await response.text()
+        async with session.get(url) as response:
+            text = await response.text()
         soup = BeautifulSoup(text, "html.parser")
         item = soup.select_one(".work-list-item")
         if not item:
@@ -40,22 +38,23 @@ async def check_site(name, url):
         if last_seen[name] != link:
             last_seen[name] = link
             msg = f"🆕 <b>Новое в разделе {name}:</b>\n{title}\n{link}"
-            await bot.send_message(chat_id=CHAT_ID, text=msg)
+            await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode=ParseMode.HTML)
             print("Отправлено сообщение:", msg)
     except Exception as e:
         print(f"Ошибка при проверке {name}: {e}")
 
 # --- ОСНОВНОЙ АСИНХРОННЫЙ ЦИКЛ ---
 async def main_loop():
-    try:
-        await bot.send_message(chat_id=CHAT_ID, text="✅ Бот запущен и работает!")
-    except Exception as e:
-        print("Не удалось отправить стартовое сообщение:", e)
+    async with aiohttp.ClientSession() as session:
+        try:
+            await bot.send_message(chat_id=CHAT_ID, text="✅ Бот запущен и работает!", parse_mode=ParseMode.HTML)
+        except Exception as e:
+            print("Не удалось отправить стартовое сообщение:", e)
 
-    while True:
-        for name, url in URLS.items():
-            await check_site(name, url)
-        await asyncio.sleep(CHECK_INTERVAL)
+        while True:
+            for name, url in URLS.items():
+                await check_site(name, url, session)
+            await asyncio.sleep(CHECK_INTERVAL)
 
 # --- Flask сервер для Render ---
 app = Flask(__name__)
@@ -69,7 +68,5 @@ def run_flask():
 
 # --- ЗАПУСК ---
 if __name__ == "__main__":
-    # Flask сразу запускается в отдельном потоке
     Thread(target=run_flask, daemon=True).start()
-    # Асинхронный цикл бота
     asyncio.run(main_loop())
