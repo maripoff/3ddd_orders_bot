@@ -122,10 +122,19 @@ def main():
     # Запуск бота (не оборачиваем в asyncio.run)
     app_bot.run_polling(close_loop=False)
 
+# --- ЗАЩИТА ОТ ДВОЙНОГО ЗАПУСКА ---
+def already_running():
+    lock_file = "/tmp/bot.lock"
+    if os.path.exists(lock_file):
+        return True
+    with open(lock_file, "w") as f:
+        f.write(str(os.getpid()))
+    return False
+
 if __name__ == "__main__":
-    # --- защита от двойного запуска (Flask иногда дергает main дважды) ---
     import sys
-    if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+    if already_running():
+        print("⚠️ Второй процесс обнаружен, завершаюсь")
         sys.exit(0)
 
     main()
