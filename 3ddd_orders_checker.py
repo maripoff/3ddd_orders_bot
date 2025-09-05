@@ -1,10 +1,11 @@
 import os
 import asyncio
-import threading
-import requests
+import aiohttp
 from bs4 import BeautifulSoup
 from telegram import Bot
+from telegram.constants import ParseMode
 from flask import Flask
+from threading import Thread
 
 # --- НАСТРОЙКИ ---
 TOKEN = os.environ.get("TOKEN")  # токен из переменных окружения
@@ -17,17 +18,18 @@ URLS = {
     "Заказы": "https://3ddd.ru/work/tasks",
 }
 
-# --- ИНИЦИАЛИЗАЦИЯ БОТА ---
-bot = Bot(token=TOKEN)
+# --- ИНИЦИАЛИЗАЦИЯ ---
+bot = Bot(token=TOKEN, parse_mode=ParseMode.HTML)
 last_seen = {name: None for name in URLS}
 
 # --- ФУНКЦИЯ ПРОВЕРКИ САЙТА ---
 async def check_site(name, url):
     global last_seen
     try:
-        r = requests.get(url)
-        soup = BeautifulSoup(r.text, "html.parser")
-
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                text = await response.text()
+        soup = BeautifulSoup(text, "html.parser")
         item = soup.select_one(".work-list-item")
         if not item:
             return
@@ -37,7 +39,7 @@ async def check_site(name, url):
 
         if last_seen[name] != link:
             last_seen[name] = link
-            msg = f"🆕 Новое в разделе {name}:\n{title}\n{link}"
+            msg = f"🆕 <b>Новое в разделе {name}:</b>\n{title}\n{link}"
             await bot.send_message(chat_id=CHAT_ID, text=msg)
             print("Отправлено сообщение:", msg)
     except Exception as e:
@@ -45,13 +47,17 @@ async def check_site(name, url):
 
 # --- ОСНОВНОЙ АСИНХРОННЫЙ ЦИКЛ ---
 async def main_loop():
-    await bot.send_message(chat_id=CHAT_ID, text="✅ Бот запущен и работает!")
+    try:
+        await bot.send_message(chat_id=CHAT_ID, text="✅ Бот запущен и работает!")
+    except Exception as e:
+        print("Не удалось отправить стартовое сообщение:", e)
+
     while True:
         for name, url in URLS.items():
             await check_site(name, url)
         await asyncio.sleep(CHECK_INTERVAL)
 
-# --- MИНИ ВЕБ-СЕРВЕР ДЛЯ Render ---
+# --- Flask сервер для Render ---
 app = Flask(__name__)
 
 @app.route("/")
@@ -63,7 +69,7 @@ def run_flask():
 
 # --- ЗАПУСК ---
 if __name__ == "__main__":
-    # Flask в отдельном потоке, чтобы Web Service видел порт
-    threading.Thread(target=run_flask).start()
+    # Flask сразу запускается в отдельном потоке
+    Thread(target=run_flask, daemon=True).start()
     # Асинхронный цикл бота
     asyncio.run(main_loop())
