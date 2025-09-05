@@ -21,7 +21,7 @@ URLS = {
 # --- ИНИЦИАЛИЗАЦИЯ ---
 last_seen = {name: None for name in URLS}
 
-# --- ФЛАСК ДЛЯ RENDER ---
+# --- FLASK ДЛЯ RENDER ---
 app = Flask(__name__)
 
 @app.route("/")
@@ -34,7 +34,7 @@ def run_flask():
 Thread(target=run_flask, daemon=True).start()
 
 # --- ФУНКЦИЯ ПРОВЕРКИ САЙТА ---
-async def check_site(app_bot, name, url, session):
+async def check_site(bot, name, url, session):
     try:
         async with session.get(url) as response:
             text = await response.text()
@@ -49,23 +49,25 @@ async def check_site(app_bot, name, url, session):
         if last_seen[name] != link:
             last_seen[name] = link
             msg = f"🆕 <b>Новое в разделе {name}:</b>\n{title}\n{link}"
-            await app_bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode=constants.ParseMode.HTML)
+            await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode=constants.ParseMode.HTML)
             print("Отправлено сообщение:", msg)
             return msg
     except Exception as e:
         print(f"Ошибка при проверке {name}: {e}")
 
 # --- АСИНХРОННЫЙ ЦИКЛ ---
-async def main_loop(app_bot):
+async def main_loop(bot):
     async with aiohttp.ClientSession() as session:
         while True:
             for name, url in URLS.items():
-                await check_site(app_bot, name, url, session)
+                await check_site(bot, name, url, session)
             await asyncio.sleep(CHECK_INTERVAL)
 
 # --- КОМАНДЫ TELEGRAM ---
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Бот запущен и работает!\nНапиши /commands, чтобы увидеть список команд")
+    await update.message.reply_text(
+        "✅ Бот запущен и работает!\nНапиши /commands, чтобы увидеть список команд"
+    )
 
 async def latest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_lines = []
@@ -85,31 +87,32 @@ async def commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- ЗАПУСК BOT ---
 async def runner():
-    app_builder = ApplicationBuilder().token(TOKEN).build()
+    app_bot = ApplicationBuilder().token(TOKEN).build()
 
     # Регистрируем команды
-    app_builder.add_handler(CommandHandler("status", status))
-    app_builder.add_handler(CommandHandler("latest", latest))
-    app_builder.add_handler(CommandHandler("commands", commands))
+    app_bot.add_handler(CommandHandler("status", status))
+    app_bot.add_handler(CommandHandler("latest", latest))
+    app_bot.add_handler(CommandHandler("commands", commands))
 
-    # Функция для запуска фоновой проверки и приветственного сообщения
-    async def on_startup(application):
-        # Приветственное сообщение
+    # Стартовое сообщение после полной инициализации бота
+    async def on_startup():
         try:
-            await application.bot.send_message(
+            await app_bot.bot.send_message(
                 chat_id=CHAT_ID,
                 text="✅ Бот запущен и работает!\nНапиши /commands, чтобы увидеть список доступных команд"
             )
+            print("Стартовое сообщение отправлено ✅")
         except Exception as e:
             print("Не удалось отправить стартовое сообщение:", e)
-        # Фоновая проверка сайта
-        asyncio.create_task(main_loop(application.bot))
 
-    # Регистрируем on_startup
-    app_builder.post_init(on_startup)
+        # Запускаем фоновую проверку
+        asyncio.create_task(main_loop(app_bot.bot))
 
-    # Запускаем polling (Telegram команды теперь работают корректно)
-    await app_builder.run_polling(stop_signals=None)
+    # Добавляем обработчик on_startup
+    app_bot.post_init = on_startup
+
+    # Запускаем polling (Telegram команды)
+    await app_bot.run_polling(stop_signals=None)
 
 # --- ОСНОВНОЙ ---
 if __name__ == "__main__":
