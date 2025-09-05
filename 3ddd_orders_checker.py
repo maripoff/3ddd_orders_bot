@@ -11,7 +11,7 @@ from datetime import datetime
 # --- НАСТРОЙКИ ---
 TOKEN = os.environ.get("TOKEN")
 CHAT_ID = int(os.environ.get("CHAT_ID"))
-CHECK_INTERVAL = 300  # каждые 5 минут
+CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", 300))
 PORT = int(os.environ.get("PORT", 10000))
 
 URLS = {
@@ -21,10 +21,9 @@ URLS = {
 
 last_seen = {name: None for name in URLS}
 last_checked = {name: None for name in URLS}
+first_run = True  # предотвращает рассылку сообщений при старте
 
-first_run = True  # флаг для предотвращения рассылки при старте
-
-# --- FLASK ДЛЯ RENDER ---
+# --- FLASK ---
 app = Flask(__name__)
 
 @app.route("/")
@@ -32,62 +31,71 @@ def index():
     return "Bot is running ✅"
 
 def run_flask():
-    app.run(host="0.0.0.0", port=PORT)
+    app.run(host="0.0.0.0", port=PORT, threaded=False, use_reloader=False)
 
 Thread(target=run_flask, daemon=True).start()
 
-# --- ФУНКЦИЯ ПРОВЕРКИ САЙТА ---
+# --- ФУНКЦИИ ПРОВЕРКИ САЙТА ---
 async def check_site(bot, name, url, session):
     global first_run
     try:
         async with session.get(url) as response:
             text = await response.text()
-
-        # Логируем HTML, чтобы проверить, что приходит с сайта
-        print(f"--- HTML для {name} ---")
-        print(text[:1000])  # Печатаем первые 1000 символов HTML для диагностики
-
         soup = BeautifulSoup(text, "html.parser")
-        item = soup.select_one(".work-list-item")  # Если страница загружена динамически, нужно будет изменить селектор
-
+        item = soup.select_one(".work-list-item")
         if not item:
-            return None, None  # Если элемента нет, возвращаем None
+            return
 
         title = item.select_one("h3").get_text(strip=True)
         link = "https://3ddd.ru" + item.select_one("a")["href"]
 
         if last_seen[name] != link:
-            last_seen[name] = link
-            # отправляем сообщения только если это не первый запуск
+            last_seen[name] = f"{title}\n{link}"
             if not first_run:
                 msg = f"🆕 <b>Новое в разделе {name}:</b>\n{title}\n{link}"
                 await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode=constants.ParseMode.HTML)
-                print("Отправлено сообщение:", msg)
-            return title, link
-        return None, None  # Если ссылка не изменилась, возвращаем None
+                print(f"[{datetime.now()}] Отправлено сообщение: {msg}")
     except Exception as e:
         print(f"Ошибка при проверке {name}: {e}")
-        return None, None
+
+# --- ФУНКЦИЯ ДЛЯ ПОЛУЧЕНИЯ ПЕРВОЙ ВАКАНСИИ/ЗАДАЧИ ---
+async def fetch_first_item(url):
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                text = await response.text()
+        soup = BeautifulSoup(text, "html.parser")
+        item = soup.select_one(".work-list-item")
+        if item:
+            title = item.select_one("h3").get_text(strip=True)
+            link = "https://3ddd.ru" + item.select_one("a")["href"]
+            return f"{title}\n{link}"
+    except Exception as e:
+        print(f"Ошибка при получении данных с {url}: {e}")
+    return "нет данных"
 
 # --- ФОНОВАЯ ЗАДАЧА ---
 async def main_loop(bot):
     global first_run
     async with aiohttp.ClientSession() as session:
+        # --- Сразу первая проверка ---
+        for name, url in URLS.items():
+            try:
+                await check_site(bot, name, url, session)
+                last_checked[name] = datetime.now()
+            except Exception as e:
+                print(f"Ошибка в main_loop для {name}: {e}")
+        first_run = False  # разрешаем уведомления после первой проверки
+
+        # --- Цикл с интервалом ---
         while True:
+            await asyncio.sleep(CHECK_INTERVAL)
             for name, url in URLS.items():
                 try:
-                    title, link = await check_site(bot, name, url, session)
+                    await check_site(bot, name, url, session)
                     last_checked[name] = datetime.now()
-                    if first_run:
-                        # Если первый запуск, сразу показываем заголовки первой вакансии и первого заказа
-                        if name == "Вакансии" and title:
-                            last_seen["Вакансии"] = title
-                        if name == "Заказы" and title:
-                            last_seen["Заказы"] = title
                 except Exception as e:
                     print(f"Ошибка в main_loop для {name}: {e}")
-            first_run = False  # после первой проверки разрешаем уведомления
-            await asyncio.sleep(CHECK_INTERVAL)
 
 # --- КОМАНДЫ TELEGRAM ---
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -99,9 +107,22 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def latest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_lines = []
-    for name, link in last_seen.items():
-        msg_lines.append(f"<b>{name}:</b> {link if link else 'нет данных'}")
-    await update.message.reply_text("\n".join(msg_lines), parse_mode=constants.ParseMode.HTML)
+
+    # Вакансия
+    if last_seen["Вакансии"]:
+        msg_lines.append(f"<b>Вакансия:</b>\n{last_seen['Вакансии']}")
+    else:
+        first_vacancy = await fetch_first_item(URLS["Вакансии"])
+        msg_lines.append(f"<b>Вакансия:</b>\n{first_vacancy}")
+
+    # Заказ
+    if last_seen["Заказы"]:
+        msg_lines.append(f"<b>Заказ:</b>\n{last_seen['Заказы']}")
+    else:
+        first_task = await fetch_first_item(URLS["Заказы"])
+        msg_lines.append(f"<b>Заказ:</b>\n{first_task}")
+
+    await update.message.reply_text("\n\n".join(msg_lines), parse_mode=constants.ParseMode.HTML)
 
 async def commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -120,6 +141,7 @@ async def on_startup(bot):
         print("Стартовое сообщение отправлено ✅")
     except Exception as e:
         print("Не удалось отправить стартовое сообщение:", e)
+
     # Запускаем фоновую задачу
     asyncio.create_task(main_loop(bot))
 
@@ -131,16 +153,11 @@ def main():
     app_bot.add_handler(CommandHandler("latest", latest))
     app_bot.add_handler(CommandHandler("commands", commands))
 
-    # Добавляем on_startup
+    # on_startup
     app_bot.post_init = lambda app: on_startup(app.bot)
 
-    # Запуск бота (не оборачиваем в asyncio.run)
+    # Запуск polling
     app_bot.run_polling(close_loop=False)
 
 if __name__ == "__main__":
-    # --- защита от двойного запуска (Flask иногда дергает main дважды) ---
-    import sys
-    if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
-        sys.exit(0)
-
     main()
