@@ -1,11 +1,12 @@
+import os
 import time
 import requests
 from bs4 import BeautifulSoup
 from telegram import Bot
 
 # --- НАСТРОЙКИ ---
-TOKEN = "8292943945:AAF0nvRVIfWFS_LZZcjYhHj7wp1CE7XRJhw"  # твой токен
-CHAT_ID = 1123455967  # твой chat_id
+TOKEN = os.environ.get("TOKEN")  # Берём токен из переменных окружения
+CHAT_ID = int(os.environ.get("CHAT_ID"))  # Берём chat_id из переменных окружения
 CHECK_INTERVAL = 300  # проверка каждые 5 минут
 
 URLS = {
@@ -46,7 +47,6 @@ def main():
             except Exception as e:
                 print(f"Ошибка при проверке {name}: {e}")
         time.sleep(CHECK_INTERVAL)
-
 
 if __name__ == "__main__":
     main()
