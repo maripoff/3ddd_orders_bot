@@ -22,6 +22,8 @@ URLS = {
 last_seen = {name: None for name in URLS}
 last_checked = {name: None for name in URLS}
 
+first_run = True  # флаг для предотвращения рассылки при старте
+
 # --- FLASK ДЛЯ RENDER ---
 app = Flask(__name__)
 
@@ -36,6 +38,7 @@ Thread(target=run_flask, daemon=True).start()
 
 # --- ФУНКЦИЯ ПРОВЕРКИ САЙТА ---
 async def check_site(bot, name, url, session):
+    global first_run
     try:
         async with session.get(url) as response:
             text = await response.text()
@@ -49,15 +52,17 @@ async def check_site(bot, name, url, session):
 
         if last_seen[name] != link:
             last_seen[name] = link
-            msg = f"🆕 <b>Новое в разделе {name}:</b>\n{title}\n{link}"
-            await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode=constants.ParseMode.HTML)
-            print("Отправлено сообщение:", msg)
+            # отправляем сообщения только если это не первый запуск
+            if not first_run:
+                msg = f"🆕 <b>Новое в разделе {name}:</b>\n{title}\n{link}"
+                await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode=constants.ParseMode.HTML)
+                print("Отправлено сообщение:", msg)
     except Exception as e:
         print(f"Ошибка при проверке {name}: {e}")
 
 # --- ФОНОВАЯ ЗАДАЧА ---
 async def main_loop(bot):
-    await asyncio.sleep(5)  # небольшая задержка на старт
+    global first_run
     async with aiohttp.ClientSession() as session:
         while True:
             for name, url in URLS.items():
@@ -66,6 +71,7 @@ async def main_loop(bot):
                     last_checked[name] = datetime.now()
                 except Exception as e:
                     print(f"Ошибка в main_loop для {name}: {e}")
+            first_run = False  # после первой проверки разрешаем уведомления
             await asyncio.sleep(CHECK_INTERVAL)
 
 # --- КОМАНДЫ TELEGRAM ---
